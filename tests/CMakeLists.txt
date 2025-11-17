@@ -69,6 +69,78 @@ function(unzip_test_data testname)
   add_dependencies(${testname} ${testname}-data-unzip)
 endfunction()
 
+function(setup_test testname)
+  set(options GPU MPI)
+  set(multi_value_args SOURCES LABELS)
+  cmake_parse_arguments(
+    PARSE_ARGV 1 LIBNEGF_TEST "${options}" "" "${multi_value_args}"
+  )
+
+  if(NOT LIBNEGF_TEST_SOURCES)
+    message(SEND_ERROR "No list of SOURCES provided for test")
+  endif()
+
+  # detect implementation language
+  list(GET LIBNEGF_TEST_SOURCES 0 source_main)
+  if(source_main MATCHES "[.]c$")
+    set(LIBNEGF_TEST_LANG C)
+  elseif(source_main MATCHES "[.]cpp$")
+    set(LIBNEGF_TEST_LANG CXX)
+  elseif(source_main MATCHES "[.]f90$")
+    set(LIBNEGF_TEST_LANG Fortran)
+  else()
+    message(SEND_ERROR "unknown file extension of test source ${source_main}")
+  endif()
+
+
+  message(STATUS "add test: " ${testname} "  " ${source} "  " ${label})
+
+
+  # set up test compilation
+  add_executable(${testname} ${LIBNEGF_TEST_SOURCES})
+
+  if(LIBNEGF_TEST_LANG EQUAL C)
+    target_link_libraries(${testname} MPI::MPI_C)
+    target_include_directories(${testname} PRIVATE ${CMAKE_BINARY_DIR}/src/api)
+  elseif(LIBNEGF_TEST_LANG EQUAL CXX)
+    target_link_libraries(${testname} MPI::MPI_CXX)
+    target_include_directories(${testname} PRIVATE ${CMAKE_BINARY_DIR}/src/api)
+  elseif(LIBNEGF_TEST_LANG EQUAL Fortran)
+    target_link_libraries(${testname} MPI::MPI_Fortran)
+    target_include_directories(${testname} PRIVATE ${BUILD_MOD_DIR})
+  endif()
+  target_link_libraries(${testname} negf)
+  target_link_libraries(${testname} LAPACK::LAPACK)
+
+
+  # determine how to execute the test
+  #
+  # with GPUs, always execute with the aid of ${MPIEXEC} because front-end may not have GPUS
+  #
+  # TODO add option to allow _always_ submitting jobs with MPIEXEC (e.g., for Fugaku, where front-end nodes run on Intel CPUs but code is compiled by default for Arm64FX)
+  if(${LIBNEGF_TEST_GPU} AND NOT ${LIBNEGF_TEST_MPI})
+    set(cmd ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1 ${MPIEXEC_PREFLAGS}
+            ./${testname} ${MPIEXEC_POSTFLAGS}
+    )
+  elseif(${LIBNEGF_TEST_MPI})
+    set(cmd
+        ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${MPIEXEC_MAX_NUMPROCS}
+        ${MPIEXEC_PREFLAGS} ./${testname} ${MPIEXEC_POSTFLAGS}
+    )
+  else()
+    set(cmd ./${testname})
+  endif()
+
+  message(FATAL_ERROR do not run ci)
+
+  add_test(NAME ${testname} COMMAND ${cmd})
+
+  set_property(TEST ${testname} PROPERTY LABELS ${LIBNEGF_TEST_LABELS})
+
+  transfer_test_data(${testname})
+
+endfunction()
+
 # A function to setup C++ tests.
 function(setup_cpp_test testname label source)
   message(STATUS "add test: " ${testname} "  " ${source} "  " ${label})
